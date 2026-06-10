@@ -16,6 +16,9 @@ def load_data():
     
     try:
         df = pd.read_excel(file_name)
+        # Убираем лишние пробелы в названиях антибиотиков и отделений
+df['Антибиотик'] = df['Антибиотик'].astype(str).str.strip()
+df['Отделение'] = df['Отделение'].astype(str).str.strip()
         # Проверка на наличие нужных колонок
         required_cols = ['Отделение', 'Микроорганизм', 'Результат', 'Антибиотик']
         missing = [c for c in required_cols if c not in df.columns]
