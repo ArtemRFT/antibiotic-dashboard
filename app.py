@@ -5,11 +5,16 @@ import plotly.figure_factory as ff
 import os
 import glob
 
+# Настройка страницы
 st.set_page_config(page_title="Мониторинг резистентности", layout="wide", page_icon="🦠")
 st.title("🦠 Дашборд: Мониторинг антибиотикорезистентности")
 
+# ==============================================================================
+# 1. ЗАГРУЗКА И ПОДГОТОВКА ДАННЫХ
+# ==============================================================================
 @st.cache_data
 def load_data():
+    # Ищем файл динамически, чтобы избежать ошибок, если имя чуть изменилось
     file_name = 'ИТОГОВЫЙ_МОНИТОРИНГ_май2026-дашборд.xlsx'
     if not os.path.exists(file_name):
         xlsx_files = glob.glob('*.xlsx')
@@ -23,16 +28,19 @@ def load_data():
     try:
         df = pd.read_excel(file_name)
         
-        # 🔥 ВАЖНО: Убираем все лишние пробелы в текстовых колонках, чтобы избежать ошибок сопоставления
+        # 🔥 КРИТИЧЕСКИ ВАЖНО: Убираем все лишние пробелы в текстовых колонках.
+        # Это предотвращает ошибки, когда "E.coli " и "E.coli" считаются разными.
         for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
         
+        # Проверка наличия обязательных колонок
         required_cols = ['Отделение', 'Микроорганизм', 'Результат', 'Антибиотик']
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             st.error(f"❌ В файле отсутствуют колонки: {missing}. Проверьте структуру Excel.")
             return pd.DataFrame()
+            
         return df
     except Exception as e:
         st.error(f"❌ Ошибка чтения файла: {e}")
@@ -40,27 +48,40 @@ def load_data():
 
 df = load_data()
 
+# ==============================================================================
+# 2. ФИЛЬТРЫ В БОКОВОЙ ПАНЕЛИ
+# ==============================================================================
 if not df.empty:
     st.sidebar.header("⚙️ Параметры выборки")
     
-    depts = st.sidebar.multiselect("Выберите отделение:", 
-                                   options=sorted(df['Отделение'].dropna().unique()), 
-                                   default=sorted(df['Отделение'].dropna().unique()))
+    depts = st.sidebar.multiselect(
+        "Выберите отделение:", 
+        options=sorted(df['Отделение'].dropna().unique()), 
+        default=sorted(df['Отделение'].dropna().unique())
+    )
     
-    microbes = st.sidebar.multiselect("Выберите микроорганизм:", 
-                                      options=sorted(df['Микроорганизм'].dropna().unique()), 
-                                      default=sorted(df['Микроорганизм'].dropna().unique()))
+    microbes = st.sidebar.multiselect(
+        "Выберите микроорганизм:", 
+        options=sorted(df['Микроорганизм'].dropna().unique()), 
+        default=sorted(df['Микроорганизм'].dropna().unique())
+    )
     
-    results = st.sidebar.multiselect("Выберите результат (S/I/R):", 
-                                     options=sorted(df['Результат'].dropna().unique()), 
-                                     default=sorted(df['Результат'].dropna().unique()))
+    results = st.sidebar.multiselect(
+        "Выберите результат (S/I/R):", 
+        options=sorted(df['Результат'].dropna().unique()), 
+        default=sorted(df['Результат'].dropna().unique())
+    )
 
+    # Применяем фильтры
     filtered_df = df[
         (df['Отделение'].isin(depts)) &
         (df['Микроорганизм'].isin(microbes)) &
         (df['Результат'].isin(results))
     ]
 
+    # ==============================================================================
+    # 3. KPI МЕТРИКИ
+    # ==============================================================================
     col1, col2, col3 = st.columns(3)
     col1.metric("📊 Всего тестов", len(filtered_df))
     col2.metric("🛑 Резистентных (R)", len(filtered_df[filtered_df['Результат'] == 'R']))
@@ -68,30 +89,44 @@ if not df.empty:
 
     st.markdown("---")
 
+    # ==============================================================================
+    # 4. ОСНОВНЫЕ ГРАФИКИ
+    # ==============================================================================
     col_left, col_right = st.columns(2)
 
     with col_left:
         st.subheader("📈 Распределение по результатам (S / I / R)")
-        fig_pie = px.pie(filtered_df, names='Результат', hole=0.4, 
-                         color='Результат', 
-                         color_discrete_map={'S':'#2ca02c', 'I':'#ff7f0e', 'R':'#d62728'})
+        fig_pie = px.pie(
+            filtered_df, names='Результат', hole=0.4, 
+            color='Результат', 
+            color_discrete_map={'S':'#2ca02c', 'I':'#ff7f0e', 'R':'#d62728'}
+        )
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_right:
         st.subheader("🏥 Профиль резистентности по отделениям")
         dept_res = filtered_df.groupby(['Отделение', 'Результат']).size().reset_index(name='count')
-        fig_bar = px.bar(dept_res, x='Отделение', y='count', color='Результат', barmode='stack',
-                         color_discrete_map={'S':'#2ca02c', 'I':'#ff7f0e', 'R':'#d62728'})
+        fig_bar = px.bar(
+            dept_res, x='Отделение', y='count', color='Результат', barmode='stack',
+            color_discrete_map={'S':'#2ca02c', 'I':'#ff7f0e', 'R':'#d62728'}
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
 
     st.subheader("🦠 Топ-10 микроорганизмов в выборке")
     top_microbes = filtered_df['Микроорганизм'].value_counts().head(10).reset_index()
     top_microbes.columns = ['Микроорганизм', 'Количество']
-    fig_microbes = px.bar(top_microbes, x='Количество', y='Микроорганизм', orientation='h', color='Количество', color_continuous_scale='Reds')
+    fig_microbes = px.bar(
+        top_microbes, x='Количество', y='Микроорганизм', orientation='h', 
+        color='Количество', color_continuous_scale='Reds'
+    )
     st.plotly_chart(fig_microbes, use_container_width=True)
 
+    # ==============================================================================
+    # 5. СТАТИСТИКА ПО АНТИБИОТИКАМ (ТАБЛИЦА)
+    # ==============================================================================
     st.subheader("💊 Все антибиотики по уровню резистентности (%R)")
     
+    # Фильтруем только валидные результаты S, I, R (игнорируем текстовые пометки)
     valid_df = filtered_df[filtered_df['Результат'].isin(['S', 'I', 'R'])].copy()
     
     if not valid_df.empty:
@@ -108,9 +143,11 @@ if not df.empty:
         
         chart_height = max(500, len(all_abs) * 35) 
         
-        fig_ab = px.bar(all_abs, x='%R', y='Антибиотик', orientation='h', 
-                        color='%R', color_continuous_scale='OrRd',
-                        text='label', range_x=[0, 105]) 
+        fig_ab = px.bar(
+            all_abs, x='%R', y='Антибиотик', orientation='h', 
+            color='%R', color_continuous_scale='OrRd',
+            text='label', range_x=[0, 105]
+        ) 
         
         fig_ab.update_layout(
             yaxis_title='', 
@@ -120,35 +157,32 @@ if not df.empty:
         )
         fig_ab.update_traces(textposition='outside', textfont_size=12, textfont_color="black")
         fig_ab.update_yaxes(autorange="reversed")
-        
         st.plotly_chart(fig_ab, use_container_width=True)
 
-        # ==========================================
-        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (С ЧЕРНЫМИ ГРАНИЦАМИ)
-        # ==========================================
+        # ==============================================================================
+        # 6. 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (ИСПРАВЛЕННАЯ И УЛУЧШЕННАЯ)
+        # ==============================================================================
         st.markdown("---")
         st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
         st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
-        # 1. ГРУППИРУЕМ И СРАЗУ ДЕЛАЕМ .reset_index()! 
+        # 🔥 КРИТИЧЕСКИЙ FIX: .reset_index() сразу после unstack, чтобы колонки стали обычными, а не индексом
         pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0).reset_index()
         
-        # 2. Страховка: добавляем колонки S, I, R, если вдруг какой-то не попал в выборку
         for col in ['S', 'I', 'R']:
             if col not in pair_stats.columns:
                 pair_stats[col] = 0
                 
-        # 3. Считаем общее количество и проценты
         pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
         pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
         pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        # 4. Фильтруем: оставляем только те пары, где было 3 и более тестов
+        # Фильтр: минимум 3 теста на пару
         heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
-            # 5. Сортируем: самые "проблемные" (с высоким средним %R) идут первыми
+            # Сортировка: самые "проблемные" (высокий средний %R) идут первыми
             microbe_order = heatmap_df.groupby('Микроорганизм')['%R'].mean().sort_values(ascending=False).index.tolist()
             ab_order = heatmap_df.groupby('Антибиотик')['%R'].mean().sort_values(ascending=False).index.tolist()
             
@@ -156,10 +190,10 @@ if not df.empty:
             heatmap_df['Антибиотик'] = pd.Categorical(heatmap_df['Антибиотик'], categories=ab_order, ordered=True)
             heatmap_df = heatmap_df.sort_values(['Микроорганизм', 'Антибиотик'])
             
-            # 6. Создаем матрицу для цвета ячеек (используем %R как индикатор опасности)
+            # Матрица для цвета ячеек
             pivot_color = heatmap_df.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
             
-            # 7. Генерируем текст для ячеек и всплывающих подсказок
+            # Генерация текста для ячеек и подсказок
             z_text = []
             hover_text = []
             
@@ -184,9 +218,7 @@ if not df.empty:
                 z_text.append(row_z)
                 hover_text.append(row_hover)
             
-            # 8. Рисуем тепловую карту
-            import plotly.figure_factory as ff
-            
+            # Рисуем тепловую карту
             fig_heatmap = ff.create_annotated_heatmap(
                 z=pivot_color.values,
                 x=list(pivot_color.columns),
@@ -209,41 +241,36 @@ if not df.empty:
                 margin=dict(l=220, b=150)
             )
             
-            # 🔥 ДОБАВЛЕНО: Черные границы для каждой ячейки (ширина 1 пиксель)
+            # 🔥 ДОБАВЛЕНО: Чёрные границы для каждой ячейки
             fig_heatmap.update_traces(marker=dict(line=dict(color='black', width=1)))
             
             st.plotly_chart(fig_heatmap, use_container_width=True)
         else:
-            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару микроб-антибиотик).")
 
-        # ==========================================
-        # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %I)
-        # ==========================================
+        # ==============================================================================
+        # 7. 📋 ПОЛНАЯ ТАБЛИЦА (с %S, %I, %R)
+        # ==============================================================================
         st.markdown("---")
         st.subheader("📋 Полная статистика по всем антибиотикам")
         
-        # Берем данные из all_abs (который считается выше в коде)
         display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
         
         # Добавляем расчет процентов для S и I
         display_df['%S'] = (display_df['S'] / display_df['Total']) * 100
         display_df['%I'] = (display_df['I'] / display_df['Total']) * 100
         
-        # Округляем проценты до 1 знака
+        # Округляем
         display_df['%R'] = display_df['%R'].round(1)
         display_df['%S'] = display_df['%S'].round(1)
         display_df['%I'] = display_df['%I'].round(1)
         
-        # Переименовываем и выстраиваем колонки в логичном порядке (абсолют + процент)
+        # Переименовываем и выстраиваем в логичном порядке
         display_df.columns = [
-            'Антибиотик', 
-            'Всего тестов', 
-            'Чувствителен (S)', 
-            '% Чувствительности (S)', 
-            'Умеренно-резист. (I)', 
-            '% Умеренно-резист. (I)',  
-            'Резистентен (R)', 
-            '% Резистентности (R)'
+            'Антибиотик', 'Всего тестов', 
+            'Чувствителен (S)', '% Чувствительности (S)', 
+            'Умеренно-резист. (I)', '% Умеренно-резист. (I)', 
+            'Резистентен (R)', '% Резистентности (R)'
         ]
         
         # Меняем порядок столбцов для максимальной читаемости
@@ -257,3 +284,6 @@ if not df.empty:
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         
         st.caption("💡 *Таблица отсортирована по убыванию доли резистентных штаммов (%R). В таблице можно кликать на заголовки столбцов для сортировки, а также использовать поиск.*")
+
+else:
+    st.stop()
