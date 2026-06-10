@@ -129,16 +129,113 @@ if not df.empty:
         # БОНУС: Интерактивная таблица со всеми данными
         # ==========================================
         st.markdown("---")
+                # ==========================================
+        # 🔥 ТЕПЛОВАЯ КАРТА: Микроорганизм × Антибиотик
+        # ==========================================
+        st.markdown("---")
+        st.subheader("🔥 Антибиотикограмма: % резистентности по парам Микроб × Антибиотик")
+        st.caption("💡 *Чем краснее ячейка — тем выше % резистентности. Показаны только пары, где было ≥ 3 тестов (чтобы исключить случайные 100% из 1 анализа).*")
+        
+        # Группируем по паре (Микроб, Антибиотик)
+        pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
+        for col in ['S', 'I', 'R']:
+            if col not in pair_stats.columns:
+                pair_stats[col] = 0
+        pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
+        pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
+        
+        # Фильтр: минимум 3 теста на пару (убираем случайности)
+        pair_stats = pair_stats[pair_stats['Total'] >= 3].reset_index()
+        
+        if not pair_stats.empty:
+            # Берем топ-15 самых частых микробов, чтобы карта влезла
+            top_microbes = valid_df['Микроорганизм'].value_counts().head(15).index.tolist()
+            heatmap_df = pair_stats[pair_stats['Микроорганизм'].isin(top_microbes)].copy()
+            
+            # Строим матрицу через pivot
+            pivot = heatmap_df.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
+            
+            # Сортируем: самые "проблемные" микробы сверху, самые "проблемные" антибиотики слева
+            pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
+            pivot = pivot[pivot.mean(axis=0).sort_values(ascending=False).index]
+            
+            # Рисуем heatmap
+            import plotly.figure_factory as ff
+            
+            # Подписи внутри ячеек: "85%" или пусто, если 0
+            hover_text = [[f"{pivot.columns[j]}<br>{pivot.index[i]}<br>%R: {pivot.iloc[i, j]:.1f}%<br>(n={int(heatmap_df[(heatmap_df['Микроорганизм']==pivot.index[i]) & (heatmap_df['Антибиотик']==pivot.columns[j])]['Total'].values[0])})" 
+                           for j in range(len(pivot.columns))] for i in range(len(pivot.index))]
+            
+            z_text = [[f"{v:.0f}%" if v > 0 else "" for v in row] for row in pivot.values]
+            
+            fig_heatmap = ff.create_annotated_heatmap(
+                z=pivot.values,
+                x=list(pivot.columns),
+                y=list(pivot.index),
+                annotation_text=z_text,
+                colorscale='RdYlGn_r',  # Зеленый -> Желтый -> Красный
+                showscale=True,
+                hovertext=hover_text,
+                hoverinfo='text',
+                font_colors=['white', 'black'],
+            )
+            
+            fig_heatmap.update_layout(
+                height=max(500, len(pivot.index) * 35),
+                width=max(800, len(pivot.columns) * 50),
+                xaxis_title='Антибиотик',
+                yaxis_title='Микроорганизм',
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+                yaxis=dict(tickfont=dict(size=11)),
+                margin=dict(l=200, b=200)
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
+        
+        # ==========================================
+        # 📊 СВОДКА ПО ГРУППАМ АНТИБИОТИКОВ
+        # ==========================================
+        st.markdown("---")
+        st.subheader("📊 Резистентность в разрезе групп антибиотиков")
+        
+        if 'Группа_антибиотиков' in valid_df.columns:
+            group_stats = valid_df.groupby('Группа_антибиотиков')['Результат'].value_counts().unstack(fill_value=0)
+            for col in ['S', 'I', 'R']:
+                if col not in group_stats.columns:
+                    group_stats[col] = 0
+            group_stats['Total'] = group_stats['S'] + group_stats['I'] + group_stats['R']
+            group_stats['%R'] = (group_stats['R'] / group_stats['Total']) * 100
+            group_stats = group_stats.sort_values(by='%R', ascending=False).reset_index()
+            
+            group_stats['label'] = group_stats.apply(
+                lambda row: f"{row['%R']:.1f}% ({int(row['R'])}/{int(row['Total'])})", axis=1
+            )
+            
+            fig_groups = px.bar(group_stats, x='Группа_антибиотиков', y='%R', 
+                                color='%R', color_continuous_scale='OrRd',
+                                text='label', range_y=[0, 105])
+            fig_groups.update_layout(
+                xaxis_title='Группа антибиотиков',
+                yaxis_title='% резистентности',
+                height=450,
+                xaxis=dict(tickangle=-20)
+            )
+            fig_groups.update_traces(textposition='outside', textfont_size=12)
+            st.plotly_chart(fig_groups, use_container_width=True)
+        
+        # ==========================================
+        # 📋 ПОЛНАЯ ТАБЛИЦА (осталась как была)
+        # ==========================================
+        st.markdown("---")
         st.subheader("📋 Полная статистика по всем антибиотикам")
         
-        # Готовим данные для таблицы
         display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
         display_df['%R'] = display_df['%R'].round(1)
         display_df.columns = ['Антибиотик', 'Всего тестов', 'Чувствителен (S)', 'Умеренно-резист. (I)', 'Резистентен (R)', '% Резистентности']
         
-        # Выводим таблицу (в ней работает поиск, сортировка по клику на заголовок и скачивание)
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         
-        st.caption("💡 *График и таблица отсортированы по убыванию доли резистентных штаммов (%R). В таблице можно кликать на заголовки столбцов для сортировки.*")
+        st.caption("💡 *Все графики и таблица учитывают только валидные результаты S/I/R и строятся на основе текущих фильтров в боковой панели.*")
     else:
         st.info("В выбранной выборке нет валидных результатов S/I/R для построения графика.")
