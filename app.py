@@ -79,7 +79,7 @@ if not df.empty:
     fig_microbes = px.bar(top_microbes, x='Количество', y='Микроорганизм', orientation='h', color='Количество', color_continuous_scale='Reds')
     st.plotly_chart(fig_microbes, use_container_width=True)
 
-    st.subheader("💊 Топ-10 антибиотиков по уровню резистентности (%R)")
+    st.subheader("💊 Все антибиотики по уровню резистентности (%R)")
     
     # 1. Фильтруем мусор: оставляем только строки, где Результат строго S, I или R
     # (Это уберет аномалии вроде текста "ПРОТИВОГРИБКОВЫЕ ПРЕПАРАТЫ" вместо буквы)
@@ -98,31 +98,47 @@ if not df.empty:
         ab_stats['Total'] = ab_stats['S'] + ab_stats['I'] + ab_stats['R']
         ab_stats['%R'] = (ab_stats['R'] / ab_stats['Total']) * 100
         
-        # 4. Сортируем именно по % резистентности, а не по абсолютным числам! Берем Топ-10
-        top_10_abs = ab_stats.sort_values(by='%R', ascending=False).head(10).reset_index()
+        # 4. Сортируем по % резистентности (БЕЗ ограничения .head(10) - берем ВСЕ)
+        all_abs = ab_stats.sort_values(by='%R', ascending=False).reset_index()
         
         # 5. Создаем умные подписи на графиках: "85.7% (12 из 14)"
-        top_10_abs['label'] = top_10_abs.apply(
+        all_abs['label'] = all_abs.apply(
             lambda row: f"{row['%R']:.1f}% ({int(row['R'])} из {int(row['Total'])})", axis=1
         )
         
-        # 6. Строим красивый график
-        fig_ab = px.bar(top_10_abs, x='%R', y='Антибиотик', orientation='h', 
+        # 6. Динамическая высота графика, чтобы все влезло и было удобно читать
+        # (35 пикселей на каждый антибиотик + минимум 500)
+        chart_height = max(500, len(all_abs) * 35) 
+        
+        fig_ab = px.bar(all_abs, x='%R', y='Антибиотик', orientation='h', 
                         color='%R', color_continuous_scale='OrRd',
-                        text='label', range_x=[0, 105]) # range_x чуть больше 100, чтобы текст влез
+                        text='label', range_x=[0, 105]) 
         
         fig_ab.update_layout(
             yaxis_title='', 
             xaxis_title='% резистентности (Кол-во R / Общее кол-во тестов)',
-            height=500,
-            margin=dict(l=280) # Большой отступ слева, чтобы влезли длинные названия
+            height=chart_height,
+            margin=dict(l=280) # Большой отступ слева для длинных названий
         )
         fig_ab.update_traces(textposition='outside', textfont_size=12, textfont_color="black")
-        fig_ab.update_yaxes(autorange="reversed") # Самый опасный антибиотик теперь сверху
+        fig_ab.update_yaxes(autorange="reversed") # Самый опасный антибиотик строго сверху
         
         st.plotly_chart(fig_ab, use_container_width=True)
         
-        # Небольшая сноска под графиком
-        st.caption("💡 *График отсортирован по доле резистентных штаммов (%R). В скобках указано абсолютное число R и общее количество тестов для данного препарата.*")
+        # ==========================================
+        # БОНУС: Интерактивная таблица со всеми данными
+        # ==========================================
+        st.markdown("---")
+        st.subheader("📋 Полная статистика по всем антибиотикам")
+        
+        # Готовим данные для таблицы
+        display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
+        display_df['%R'] = display_df['%R'].round(1)
+        display_df.columns = ['Антибиотик', 'Всего тестов', 'Чувствителен (S)', 'Умеренно-резист. (I)', 'Резистентен (R)', '% Резистентности']
+        
+        # Выводим таблицу (в ней работает поиск, сортировка по клику на заголовок и скачивание)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        st.caption("💡 *График и таблица отсортированы по убыванию доли резистентных штаммов (%R). В таблице можно кликать на заголовки столбцов для сортировки.*")
     else:
         st.info("В выбранной выборке нет валидных результатов S/I/R для построения графика.")
