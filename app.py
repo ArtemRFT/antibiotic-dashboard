@@ -79,12 +79,50 @@ if not df.empty:
     fig_microbes = px.bar(top_microbes, x='Количество', y='Микроорганизм', orientation='h', color='Количество', color_continuous_scale='Reds')
     st.plotly_chart(fig_microbes, use_container_width=True)
 
-    st.subheader("💊 Топ-10 антибиотиков с наибольшим числом случаев резистентности (R)")
-    df_r = filtered_df[filtered_df['Результат'] == 'R']
-    if not df_r.empty:
-        top_ab = df_r['Антибиотик'].value_counts().head(10).reset_index()
-        top_ab.columns = ['Антибиотик', 'Случаев резистентности']
-        fig_ab = px.bar(top_ab, x='Случаев резистентности', y='Антибиотик', orientation='h', color='Случаев резистентности', color_continuous_scale='OrRd')
+    st.subheader("💊 Топ-10 антибиотиков по уровню резистентности (%R)")
+    
+    # 1. Фильтруем мусор: оставляем только строки, где Результат строго S, I или R
+    # (Это уберет аномалии вроде текста "ПРОТИВОГРИБКОВЫЕ ПРЕПАРАТЫ" вместо буквы)
+    valid_df = filtered_df[filtered_df['Результат'].isin(['S', 'I', 'R'])].copy()
+    
+    if not valid_df.empty:
+        # 2. Считаем распределение S, I, R для каждого антибиотика
+        ab_stats = valid_df.groupby('Антибиотик')['Результат'].value_counts().unstack(fill_value=0)
+        
+        # Страховка: если вдруг для какого-то антибиотика нет S, I или R, создаем нулевые колонки
+        for col in ['S', 'I', 'R']:
+            if col not in ab_stats.columns:
+                ab_stats[col] = 0
+                
+        # 3. Считаем общее кол-во тестов и истинный процент резистентности (%R)
+        ab_stats['Total'] = ab_stats['S'] + ab_stats['I'] + ab_stats['R']
+        ab_stats['%R'] = (ab_stats['R'] / ab_stats['Total']) * 100
+        
+        # 4. Сортируем именно по % резистентности, а не по абсолютным числам! Берем Топ-10
+        top_10_abs = ab_stats.sort_values(by='%R', ascending=False).head(10).reset_index()
+        
+        # 5. Создаем умные подписи на графиках: "85.7% (12 из 14)"
+        top_10_abs['label'] = top_10_abs.apply(
+            lambda row: f"{row['%R']:.1f}% ({int(row['R'])} из {int(row['Total'])})", axis=1
+        )
+        
+        # 6. Строим красивый график
+        fig_ab = px.bar(top_10_abs, x='%R', y='Антибиотик', orientation='h', 
+                        color='%R', color_continuous_scale='OrRd',
+                        text='label', range_x=[0, 105]) # range_x чуть больше 100, чтобы текст влез
+        
+        fig_ab.update_layout(
+            yaxis_title='', 
+            xaxis_title='% резистентности (Кол-во R / Общее кол-во тестов)',
+            height=500,
+            margin=dict(l=280) # Большой отступ слева, чтобы влезли длинные названия
+        )
+        fig_ab.update_traces(textposition='outside', textfont_size=12, textfont_color="black")
+        fig_ab.update_yaxes(autorange="reversed") # Самый опасный антибиотик теперь сверху
+        
         st.plotly_chart(fig_ab, use_container_width=True)
+        
+        # Небольшая сноска под графиком
+        st.caption("💡 *График отсортирован по доле резистентных штаммов (%R). В скобках указано абсолютное число R и общее количество тестов для данного препарата.*")
     else:
-        st.info("В выбранной выборке нет результатов 'R' (Резистентность).")
+        st.info("В выбранной выборке нет валидных результатов S/I/R для построения графика.")
