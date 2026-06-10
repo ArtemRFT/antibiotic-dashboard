@@ -122,8 +122,8 @@ if not df.empty:
         fig_ab.update_yaxes(autorange="reversed")
         
         st.plotly_chart(fig_ab, use_container_width=True)
-        
-            # ==========================================
+
+        # ==========================================
         # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R
         # ==========================================
         st.markdown("---")
@@ -132,16 +132,19 @@ if not df.empty:
         
         # 1. Считаем проценты для всех категорий
         pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
+        
         for col in ['S', 'I', 'R']:
             if col not in pair_stats.columns:
                 pair_stats[col] = 0
+                
         pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
-        pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
-        pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
+        # 🔥 ИСПРАВЛЕНИЕ: Сбрасываем индекс, чтобы 'Микроорганизм' и 'Антибиотик' стали обычными колонками
+        heatmap_df = pair_stats.reset_index()
+        
         # 2. Фильтруем: минимум 3 теста на пару
-        heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
+        heatmap_df = heatmap_df[heatmap_df['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
             # 3. Сортируем: самые "проблемные" микробы и антибиотики (с высоким средним %R) идут первыми
@@ -234,7 +237,7 @@ if not df.empty:
             'Чувствителен (S)', 
             '% Чувствительности (S)', 
             'Умеренно-резист. (I)', 
-            '% Умеренно-резист. (I)',  # <-- НОВЫЙ СТОЛБЕЦ
+            '% Умеренно-резист. (I)',  
             'Резистентен (R)', 
             '% Резистентности (R)'
         ]
