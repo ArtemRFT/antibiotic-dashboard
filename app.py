@@ -123,150 +123,127 @@ if not df.empty:
         
         st.plotly_chart(fig_ab, use_container_width=True)
         
-                # ==========================================
-        # 🔥 ТЕПЛОВАЯ КАРТА 1: % Резистентности (R)
+            # ==========================================
+        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R
         # ==========================================
         st.markdown("---")
-        st.subheader("🔴 Антибиотикограмма: % резистентности (R) по парам Мيكроб × Антибиотик")
-        st.caption("💡 *Чем краснее ячейка — тем выше % резистентности. Показаны только пары, где было ≥ 3 тестов.*")
+        st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
+        st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
-        pair_stats_r = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
+        # 1. Считаем проценты для всех категорий
+        pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
         for col in ['S', 'I', 'R']:
-            if col not in pair_stats_r.columns:
-                pair_stats_r[col] = 0
-        pair_stats_r['Total'] = pair_stats_r['S'] + pair_stats_r['I'] + pair_stats_r['R']
-        pair_stats_r['%R'] = (pair_stats_r['R'] / pair_stats_r['Total']) * 100
+            if col not in pair_stats.columns:
+                pair_stats[col] = 0
+        pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
+        pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
+        pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
+        pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        heatmap_df_r = pair_stats_r[pair_stats_r['Total'] >= 3].reset_index()
+        # 2. Фильтруем: минимум 3 теста на пару
+        heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
-        if not heatmap_df_r.empty:
-            top_microbes_list = valid_df['Микроорганизм'].value_counts().head(15).index.tolist()
-            heatmap_df_r = heatmap_df_r[heatmap_df_r['Микроорганизм'].isin(top_microbes_list)].copy()
+        if not heatmap_df.empty:
+            # 3. Сортируем: самые "проблемные" микробы и антибиотики (с высоким средним %R) идут первыми
+            microbe_order = heatmap_df.groupby('Микроорганизм')['%R'].mean().sort_values(ascending=False).index.tolist()
+            ab_order = heatmap_df.groupby('Антибиотик')['%R'].mean().sort_values(ascending=False).index.tolist()
             
-            if not heatmap_df_r.empty:
-                pivot_r = heatmap_df_r.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
-                
-                # Сортируем: самые "проблемные" (высокий R) сверху и слева
-                pivot_r = pivot_r.loc[pivot_r.mean(axis=1).sort_values(ascending=False).index]
-                pivot_r = pivot_r[pivot_r.mean(axis=0).sort_values(ascending=False).index]
-                
-                totals_dict_r = dict(zip(zip(heatmap_df_r['Микроорганизм'], heatmap_df_r['Антибиотик']), heatmap_df_r['Total'].astype(int)))
-                
-                hover_text_r = [[f"{pivot_r.columns[j]}<br>{pivot_r.index[i]}<br>%R: {pivot_r.iloc[i, j]:.1f}%<br>(n={totals_dict_r.get((pivot_r.index[i], pivot_r.columns[j]), 0)})" 
-                               for j in range(len(pivot_r.columns))] for i in range(len(pivot_r.index))]
-                
-                z_text_r = [[f"{v:.0f}%" if v > 0 else "" for v in row] for row in pivot_r.values]
-                
-                fig_heatmap_r = ff.create_annotated_heatmap(
-                    z=pivot_r.values,
-                    x=list(pivot_r.columns),
-                    y=list(pivot_r.index),
-                    annotation_text=z_text_r,
-                    colorscale='RdYlGn_r',  # Зеленый (низкий R) -> Красный (высокий R)
-                    showscale=True,
-                    hovertext=hover_text_r,
-                    hoverinfo='text',
-                    font_colors=['white', 'black'],
-                )
-                
-                fig_heatmap_r.update_layout(
-                    height=max(500, len(pivot_r.index) * 35),
-                    width=max(800, len(pivot_r.columns) * 65),
-                    xaxis_title='Антибиотик',
-                    yaxis_title='Микроорганизм',
-                    xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
-                    yaxis=dict(tickfont=dict(size=11)),
-                    margin=dict(l=220, b=150)
-                )
-                st.plotly_chart(fig_heatmap_r, use_container_width=True)
+            heatmap_df['Микроорганизм'] = pd.Categorical(heatmap_df['Микроорганизм'], categories=microbe_order, ordered=True)
+            heatmap_df['Антибиотик'] = pd.Categorical(heatmap_df['Антибиотик'], categories=ab_order, ordered=True)
+            heatmap_df = heatmap_df.sort_values(['Микроорганизм', 'Антибиотик'])
+            
+            # 4. Создаем матрицу для цвета ячеек (используем %R как индикатор опасности)
+            pivot_color = heatmap_df.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
+            
+            # 5. Генерируем текст для ячеек и всплывающих подсказок
+            z_text = []
+            hover_text = []
+            
+            for microbe in pivot_color.index:
+                row_z = []
+                row_hover = []
+                for ab in pivot_color.columns:
+                    mask = (heatmap_df['Микроорганизм'] == microbe) & (heatmap_df['Антибиотик'] == ab)
+                    if mask.any():
+                        d = heatmap_df[mask].iloc[0]
+                        # Текст внутри ячейки (компактный, в 3 строки)
+                        row_z.append(f"S:{d['%S']:.0f}%\nI:{d['%I']:.0f}%\nR:{d['%R']:.0f}%")
+                        # Подробный текст при наведении
+                        row_hover.append(
+                            f"<b>{microbe}</b> + <b>{ab}</b><br>"
+                            f"Всего тестов: {int(d['Total'])}<br>"
+                            f"🟢 Чувствителен (S): {int(d['S'])} ({d['%S']:.1f}%)<br>"
+                            f"🟡 Умеренно-резист. (I): {int(d['I'])} ({d['%I']:.1f}%)<br>"
+                            f"🔴 Резистентен (R): {int(d['R'])} ({d['%R']:.1f}%)"
+                        )
+                    else:
+                        row_z.append("")
+                        row_hover.append(f"<b>{microbe}</b> + <b>{ab}</b><br>Нет данных (менее 3 тестов)")
+                z_text.append(row_z)
+                hover_text.append(row_hover)
+            
+            # 6. Рисуем тепловую карту
+            import plotly.figure_factory as ff
+            
+            fig_heatmap = ff.create_annotated_heatmap(
+                z=pivot_color.values,
+                x=list(pivot_color.columns),
+                y=list(pivot_color.index),
+                annotation_text=z_text,
+                colorscale='RdYlGn_r',  # Красный (высокий R) -> Желтый -> Зеленый (низкий R)
+                showscale=True,
+                hovertext=hover_text,
+                hoverinfo='text',
+                font_colors=['black', 'white'], # Черный текст на зеленом, белый на красном
+            )
+            
+            fig_heatmap.update_layout(
+                height=max(500, len(pivot_color.index) * 35),
+                width=max(800, len(pivot_color.columns) * 65),
+                xaxis_title='Антибиотик',
+                yaxis_title='Микроорганизм',
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+                yaxis=dict(tickfont=dict(size=11)),
+                margin=dict(l=220, b=150)
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
 
         # ==========================================
-        # 🟢 ТЕПЛОВАЯ КАРТА 2: % Чувствительности (S)
-        # ==========================================
-        st.markdown("---")
-        st.subheader("🟢 Антибиотикограмма: % чувствительности (S) по парам Микроб × Антибиотик")
-        st.caption("💡 *Чем зеленее ячейка — тем выше % чувствительности (препарат работает). Показаны только пары, где было ≥ 3 тестов.*")
-        
-        pair_stats_s = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
-        for col in ['S', 'I', 'R']:
-            if col not in pair_stats_s.columns:
-                pair_stats_s[col] = 0
-        pair_stats_s['Total'] = pair_stats_s['S'] + pair_stats_s['I'] + pair_stats_s['R']
-        pair_stats_s['%S'] = (pair_stats_s['S'] / pair_stats_s['Total']) * 100
-        
-        heatmap_df_s = pair_stats_s[pair_stats_s['Total'] >= 3].reset_index()
-        
-        if not heatmap_df_s.empty:
-            # Используем тот же список топ-15 микробов для консистентности
-            heatmap_df_s = heatmap_df_s[heatmap_df_s['Микроорганизм'].isin(top_microbes_list)].copy()
-            
-            if not heatmap_df_s.empty:
-                pivot_s = heatmap_df_s.pivot(index='Микроорганизм', columns='Антибиотик', values='%S').fillna(0)
-                
-                # Сортируем: самые "проблемные" (низкий S) сверху и слева, чтобы сразу видеть, где нет рабочих препаратов
-                pivot_s = pivot_s.loc[pivot_s.mean(axis=1).sort_values(ascending=True).index]
-                pivot_s = pivot_s[pivot_s.mean(axis=0).sort_values(ascending=True).index]
-                
-                totals_dict_s = dict(zip(zip(heatmap_df_s['Микроорганизм'], heatmap_df_s['Антибиотик']), heatmap_df_s['Total'].astype(int)))
-                
-                hover_text_s = [[f"{pivot_s.columns[j]}<br>{pivot_s.index[i]}<br>%S: {pivot_s.iloc[i, j]:.1f}%<br>(n={totals_dict_s.get((pivot_s.index[i], pivot_s.columns[j]), 0)})" 
-                               for j in range(len(pivot_s.columns))] for i in range(len(pivot_s.index))]
-                
-                z_text_s = [[f"{v:.0f}%" if v > 0 else "" for v in row] for row in pivot_s.values]
-                
-                fig_heatmap_s = ff.create_annotated_heatmap(
-                    z=pivot_s.values,
-                    x=list(pivot_s.columns),
-                    y=list(pivot_s.index),
-                    annotation_text=z_text_s,
-                    colorscale='RdYlGn',  # Красный (низкий S) -> Зеленый (высокий S)
-                    showscale=True,
-                    hovertext=hover_text_s,
-                    hoverinfo='text',
-                    font_colors=['white', 'black'],
-                )
-                
-                fig_heatmap_s.update_layout(
-                    height=max(500, len(pivot_s.index) * 35),
-                    width=max(800, len(pivot_s.columns) * 65),
-                    xaxis_title='Антибиотик',
-                    yaxis_title='Микроорганизм',
-                    xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
-                    yaxis=dict(tickfont=dict(size=11)),
-                    margin=dict(l=220, b=150)
-                )
-                st.plotly_chart(fig_heatmap_s, use_container_width=True)
-
-        # ==========================================
-        # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %S)
+        # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %I)
         # ==========================================
         st.markdown("---")
         st.subheader("📋 Полная статистика по всем антибиотикам")
         
         display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
         
-        # Добавляем расчет % чувствительности
+        # Добавляем расчет процентов для S и I
         display_df['%S'] = (display_df['S'] / display_df['Total']) * 100
+        display_df['%I'] = (display_df['I'] / display_df['Total']) * 100
         
+        # Округляем проценты
         display_df['%R'] = display_df['%R'].round(1)
         display_df['%S'] = display_df['%S'].round(1)
+        display_df['%I'] = display_df['%I'].round(1)
         
-        # Переименовываем и выстраиваем колонки в логичном для врача порядке
+        # Переименовываем и выстраиваем колонки в логичном порядке (абсолют + процент)
         display_df.columns = [
             'Антибиотик', 
             'Всего тестов', 
             'Чувствителен (S)', 
             '% Чувствительности (S)', 
             'Умеренно-резист. (I)', 
+            '% Умеренно-резист. (I)',  # <-- НОВЫЙ СТОЛБЕЦ
             'Резистентен (R)', 
             '% Резистентности (R)'
         ]
         
-        # Меняем порядок столбцов, чтобы S и %S были рядом
+        # Меняем порядок столбцов для максимальной читаемости
         display_df = display_df[[
             'Антибиотик', 'Всего тестов', 
             'Чувствителен (S)', '% Чувствительности (S)', 
-            'Умеренно-резист. (I)', 
+            'Умеренно-резист. (I)', '% Умеренно-резист. (I)', 
             'Резистентен (R)', '% Резистентности (R)'
         ]]
         
