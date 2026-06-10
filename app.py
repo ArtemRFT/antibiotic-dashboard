@@ -159,30 +159,32 @@ if not df.empty:
         fig_ab.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_ab, use_container_width=True)
 
-        # ==============================================================================
-        # 6. 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (ИСПРАВЛЕННАЯ И УЛУЧШЕННАЯ)
-        # ==============================================================================
+        # ==========================================
+        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ)
+        # ==========================================
         st.markdown("---")
         st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
         st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
-        # 🔥 КРИТИЧЕСКИЙ FIX: .reset_index() сразу после unstack, чтобы колонки стали обычными, а не индексом
+        # 1. ГРУППИРУЕМ И СРАЗУ ДЕЛАЕМ .reset_index()! 
         pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0).reset_index()
         
+        # 2. Страховка: добавляем колонки S, I, R, если вдруг какой-то не попал в выборку
         for col in ['S', 'I', 'R']:
             if col not in pair_stats.columns:
                 pair_stats[col] = 0
                 
+        # 3. Считаем общее количество и проценты
         pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
         pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
         pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        # Фильтр: минимум 3 теста на пару
+        # 4. Фильтруем: оставляем только те пары, где было 3 и более тестов
         heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
-            # Сортировка: самые "проблемные" (высокий средний %R) идут первыми
+            # 5. Сортируем: самые "проблемные" (с высоким средним %R) идут первыми
             microbe_order = heatmap_df.groupby('Микроорганизм')['%R'].mean().sort_values(ascending=False).index.tolist()
             ab_order = heatmap_df.groupby('Антибиотик')['%R'].mean().sort_values(ascending=False).index.tolist()
             
@@ -190,10 +192,10 @@ if not df.empty:
             heatmap_df['Антибиотик'] = pd.Categorical(heatmap_df['Антибиотик'], categories=ab_order, ordered=True)
             heatmap_df = heatmap_df.sort_values(['Микроорганизм', 'Антибиотик'])
             
-            # Матрица для цвета ячеек
+            # 6. Создаем матрицу для цвета ячеек (используем %R как индикатор опасности)
             pivot_color = heatmap_df.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
             
-            # Генерация текста для ячеек и подсказок
+            # 7. Генерируем текст для ячеек и всплывающих подсказок
             z_text = []
             hover_text = []
             
@@ -218,7 +220,9 @@ if not df.empty:
                 z_text.append(row_z)
                 hover_text.append(row_hover)
             
-            # Рисуем тепловую карту
+            # 8. Рисуем тепловую карту
+            import plotly.figure_factory as ff
+            
             fig_heatmap = ff.create_annotated_heatmap(
                 z=pivot_color.values,
                 x=list(pivot_color.columns),
@@ -241,12 +245,52 @@ if not df.empty:
                 margin=dict(l=220, b=150)
             )
             
-            # 🔥 ДОБАВЛЕНО: Чёрные границы для каждой ячейки
-            fig_heatmap.update_traces(marker=dict(line=dict(color='black', width=1)))
+            # 🔥 Строка с update_traces(marker=...) УДАЛЕНА, так как Plotly Heatmap не поддерживает это свойство и вызывал ошибку
             
             st.plotly_chart(fig_heatmap, use_container_width=True)
         else:
-            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару микроб-антибиотик).")
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
+
+        # ==========================================
+        # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %I)
+        # ==========================================
+        st.markdown("---")
+        st.subheader("📋 Полная статистика по всем антибиотикам")
+        
+        display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
+        
+        # Добавляем расчет процентов для S и I
+        display_df['%S'] = (display_df['S'] / display_df['Total']) * 100
+        display_df['%I'] = (display_df['I'] / display_df['Total']) * 100
+        
+        # Округляем проценты до 1 знака
+        display_df['%R'] = display_df['%R'].round(1)
+        display_df['%S'] = display_df['%S'].round(1)
+        display_df['%I'] = display_df['%I'].round(1)
+        
+        # Переименовываем и выстраиваем колонки в логичном порядке (абсолют + процент)
+        display_df.columns = [
+            'Антибиотик', 
+            'Всего тестов', 
+            'Чувствителен (S)', 
+            '% Чувствительности (S)', 
+            'Умеренно-резист. (I)', 
+            '% Умеренно-резист. (I)',  
+            'Резистентен (R)', 
+            '% Резистентности (R)'
+        ]
+        
+        # Меняем порядок столбцов для максимальной читаемости
+        display_df = display_df[[
+            'Антибиотик', 'Всего тестов', 
+            'Чувствителен (S)', '% Чувствительности (S)', 
+            'Умеренно-резист. (I)', '% Умеренно-резист. (I)', 
+            'Резистентен (R)', '% Резистентности (R)'
+        ]]
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        st.caption("💡 *Таблица отсортирована по убыванию доли резистентных штаммов (%R). В таблице можно кликать на заголовки столбцов для сортировки, а также использовать поиск.*")
 
         # ==============================================================================
         # 7. 📋 ПОЛНАЯ ТАБЛИЦА (с %S, %I, %R)
