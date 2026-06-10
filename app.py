@@ -123,15 +123,14 @@ if not df.empty:
         
         st.plotly_chart(fig_ab, use_container_width=True)
 
-                # ==========================================
-        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+        # ==========================================
+        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (С ЧЕРНЫМИ ГРАНИЦАМИ)
         # ==========================================
         st.markdown("---")
         st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
         st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
         # 1. ГРУППИРУЕМ И СРАЗУ ДЕЛАЕМ .reset_index()! 
-        # Это гарантия того, что 'Микроорганизм' и 'Антибиотик' станут обычными колонками, а не индексом.
         pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0).reset_index()
         
         # 2. Страховка: добавляем колонки S, I, R, если вдруг какой-то не попал в выборку
@@ -145,7 +144,7 @@ if not df.empty:
         pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        # 4. Фильтруем: оставляем только те пары, где было 3 и более тестов (убираем случайные 100% из 1 анализа)
+        # 4. Фильтруем: оставляем только те пары, где было 3 и более тестов
         heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
@@ -153,7 +152,6 @@ if not df.empty:
             microbe_order = heatmap_df.groupby('Микроорганизм')['%R'].mean().sort_values(ascending=False).index.tolist()
             ab_order = heatmap_df.groupby('Антибиотик')['%R'].mean().sort_values(ascending=False).index.tolist()
             
-            # Теперь эта строка сработает на 100%, потому что .reset_index() выше уже создал эти колонки
             heatmap_df['Микроорганизм'] = pd.Categorical(heatmap_df['Микроорганизм'], categories=microbe_order, ordered=True)
             heatmap_df['Антибиотик'] = pd.Categorical(heatmap_df['Антибиотик'], categories=ab_order, ordered=True)
             heatmap_df = heatmap_df.sort_values(['Микроорганизм', 'Антибиотик'])
@@ -172,9 +170,7 @@ if not df.empty:
                     mask = (heatmap_df['Микроорганизм'] == microbe) & (heatmap_df['Антибиотик'] == ab)
                     if mask.any():
                         d = heatmap_df[mask].iloc[0]
-                        # Текст внутри ячейки (компактный, в 3 строки)
                         row_z.append(f"S:{d['%S']:.0f}%\nI:{d['%I']:.0f}%\nR:{d['%R']:.0f}%")
-                        # Подробный текст при наведении
                         row_hover.append(
                             f"<b>{microbe}</b> + <b>{ab}</b><br>"
                             f"Всего тестов: {int(d['Total'])}<br>"
@@ -218,7 +214,7 @@ if not df.empty:
             
             st.plotly_chart(fig_heatmap, use_container_width=True)
         else:
-            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару микроб-антибиотик).")
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
 
         # ==========================================
         # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %I)
