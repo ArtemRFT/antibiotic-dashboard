@@ -124,43 +124,44 @@ if not df.empty:
         st.plotly_chart(fig_ab, use_container_width=True)
 
                 # ==========================================
-        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R
+        # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R (ИСПРАВЛЕННАЯ ВЕРСИЯ)
         # ==========================================
         st.markdown("---")
         st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
         st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
-        # 1. Считаем распределение и проценты для всех категорий
-        pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
+        # 1. ГРУППИРУЕМ И СРАЗУ ДЕЛАЕМ .reset_index()! 
+        # Это гарантия того, что 'Микроорганизм' и 'Антибиотик' станут обычными колонками, а не индексом.
+        pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0).reset_index()
         
-        # Страховка на случай, если какой-то категории нет в выборке
+        # 2. Страховка: добавляем колонки S, I, R, если вдруг какой-то не попал в выборку
         for col in ['S', 'I', 'R']:
             if col not in pair_stats.columns:
                 pair_stats[col] = 0
                 
+        # 3. Считаем общее количество и проценты
         pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
-        
-        # 🔥 ИСПРАВЛЕНИЕ: Добавляем расчет всех процентов
         pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
         pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        # 2. Фильтруем: минимум 3 теста на пару (чтобы убрать случайные 100% из 1 анализа)
+        # 4. Фильтруем: оставляем только те пары, где было 3 и более тестов (убираем случайные 100% из 1 анализа)
         heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
-            # 3. Сортируем: самые "проблемные" микробы и антибиотики (с высоким средним %R) идут первыми
+            # 5. Сортируем: самые "проблемные" (с высоким средним %R) идут первыми
             microbe_order = heatmap_df.groupby('Микроорганизм')['%R'].mean().sort_values(ascending=False).index.tolist()
             ab_order = heatmap_df.groupby('Антибиотик')['%R'].mean().sort_values(ascending=False).index.tolist()
             
+            # Теперь эта строка сработает на 100%, потому что .reset_index() выше уже создал эти колонки
             heatmap_df['Микроорганизм'] = pd.Categorical(heatmap_df['Микроорганизм'], categories=microbe_order, ordered=True)
             heatmap_df['Антибиотик'] = pd.Categorical(heatmap_df['Антибиотик'], categories=ab_order, ordered=True)
             heatmap_df = heatmap_df.sort_values(['Микроорганизм', 'Антибиотик'])
             
-            # 4. Создаем матрицу для цвета ячеек (используем %R как индикатор опасности)
+            # 6. Создаем матрицу для цвета ячеек (используем %R как индикатор опасности)
             pivot_color = heatmap_df.pivot(index='Микроорганизм', columns='Антибиотик', values='%R').fillna(0)
             
-            # 5. Генерируем текст для ячеек и всплывающих подсказок
+            # 7. Генерируем текст для ячеек и всплывающих подсказок
             z_text = []
             hover_text = []
             
@@ -187,7 +188,7 @@ if not df.empty:
                 z_text.append(row_z)
                 hover_text.append(row_hover)
             
-            # 6. Рисуем тепловую карту
+            # 8. Рисуем тепловую карту
             import plotly.figure_factory as ff
             
             fig_heatmap = ff.create_annotated_heatmap(
@@ -199,7 +200,7 @@ if not df.empty:
                 showscale=True,
                 hovertext=hover_text,
                 hoverinfo='text',
-                font_colors=['black', 'white'], # Черный текст на зеленом, белый на красном
+                font_colors=['black', 'white'],
             )
             
             fig_heatmap.update_layout(
@@ -213,7 +214,7 @@ if not df.empty:
             )
             st.plotly_chart(fig_heatmap, use_container_width=True)
         else:
-            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару).")
+            st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару микроб-антибиотик).")
 
         # ==========================================
         # 📋 ПОЛНАЯ ТАБЛИЦА (с добавленным %I)
@@ -221,13 +222,14 @@ if not df.empty:
         st.markdown("---")
         st.subheader("📋 Полная статистика по всем антибиотикам")
         
+        # Берем данные из all_abs (который считается выше в коде)
         display_df = all_abs[['Антибиотик', 'Total', 'S', 'I', 'R', '%R']].copy()
         
         # Добавляем расчет процентов для S и I
         display_df['%S'] = (display_df['S'] / display_df['Total']) * 100
         display_df['%I'] = (display_df['I'] / display_df['Total']) * 100
         
-        # Округляем проценты
+        # Округляем проценты до 1 знака
         display_df['%R'] = display_df['%R'].round(1)
         display_df['%S'] = display_df['%S'].round(1)
         display_df['%I'] = display_df['%I'].round(1)
