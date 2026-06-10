@@ -123,28 +123,30 @@ if not df.empty:
         
         st.plotly_chart(fig_ab, use_container_width=True)
 
-        # ==========================================
+                # ==========================================
         # 🔥 ЕДИНАЯ ТЕПЛОВАЯ КАРТА: S / I / R
         # ==========================================
         st.markdown("---")
         st.subheader("🔥 Сводная антибиотикограмма: Микроб × Антибиотик (S / I / R)")
         st.caption("💡 *Цвет ячейки показывает % резистентности (R): 🟢 зеленый = низкий, 🔴 красный = высокий. Внутри ячейки указан процент S, I и R. Показаны только пары с ≥ 3 тестами.*")
         
-        # 1. Считаем проценты для всех категорий
+        # 1. Считаем распределение и проценты для всех категорий
         pair_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
         
+        # Страховка на случай, если какой-то категории нет в выборке
         for col in ['S', 'I', 'R']:
             if col not in pair_stats.columns:
                 pair_stats[col] = 0
                 
         pair_stats['Total'] = pair_stats['S'] + pair_stats['I'] + pair_stats['R']
+        
+        # 🔥 ИСПРАВЛЕНИЕ: Добавляем расчет всех процентов
+        pair_stats['%S'] = (pair_stats['S'] / pair_stats['Total']) * 100
+        pair_stats['%I'] = (pair_stats['I'] / pair_stats['Total']) * 100
         pair_stats['%R'] = (pair_stats['R'] / pair_stats['Total']) * 100
         
-        # 🔥 ИСПРАВЛЕНИЕ: Сбрасываем индекс, чтобы 'Микроорганизм' и 'Антибиотик' стали обычными колонками
-        heatmap_df = pair_stats.reset_index()
-        
-        # 2. Фильтруем: минимум 3 теста на пару
-        heatmap_df = heatmap_df[heatmap_df['Total'] >= 3].copy()
+        # 2. Фильтруем: минимум 3 теста на пару (чтобы убрать случайные 100% из 1 анализа)
+        heatmap_df = pair_stats[pair_stats['Total'] >= 3].copy()
         
         if not heatmap_df.empty:
             # 3. Сортируем: самые "проблемные" микробы и антибиотики (с высоким средним %R) идут первыми
