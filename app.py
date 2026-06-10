@@ -212,6 +212,10 @@ if not df.empty:
                 yaxis=dict(tickfont=dict(size=11)),
                 margin=dict(l=220, b=150)
             )
+            
+            # 🔥 ДОБАВЛЕНО: Черные границы для каждой ячейки (ширина 1 пиксель)
+            fig_heatmap.update_traces(marker=dict(line=dict(color='black', width=1)))
+            
             st.plotly_chart(fig_heatmap, use_container_width=True)
         else:
             st.info("Недостаточно данных для построения тепловой карты (нужно минимум 3 теста на пару микроб-антибиотик).")
