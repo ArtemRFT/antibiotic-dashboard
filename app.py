@@ -28,15 +28,16 @@ def load_data():
     try:
         df = pd.read_excel(file_name)
         
-        # 🔥 НОВОЕ: Преобразуем колонку "Дата" в формат datetime для корректной фильтрации
-        if 'Дата' in df.columns:
-            # format='%d.%m.%Y' подходит для дат вида 04.05.2026. errors='coerce' предотвратит сбои на битых строках
-            df['Дата'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
-        
-        # Агрессивная очистка текстовых колонок (убираем лишние пробелы)
+        # 🔥 АГРЕССИВНАЯ ОЧИСТКА ТЕКСТОВЫХ КОЛОНОК
         for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
+        
+        # 🔥 РАБОТА С ДАТАМИ: 
+        # Оставляем оригинальную колонку 'Дата' как есть (строка "04.05.2026") для отображения.
+        # Создаем отдельную колонку 'Дата_dt' строго для внутренней фильтрации.
+        if 'Дата' in df.columns:
+            df['Дата_dt'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
         
         required_cols = ['Отделение', 'Микроорганизм', 'Результат', 'Антибиотик']
         missing = [c for c in required_cols if c not in df.columns]
@@ -57,16 +58,17 @@ df = load_data()
 if not df.empty:
     st.sidebar.header("⚙️ Параметры выборки")
     
-    # 🔥 НОВОЕ: Фильтр по дате (период или одна дата)
-    if 'Дата' in df.columns and not df['Дата'].isna().all():
-        min_date = df['Дата'].min().date()
-        max_date = df['Дата'].max().date()
+    # 🔥 НОВОЕ: Фильтр по дате с принудительным российским форматом
+    if 'Дата_dt' in df.columns and not df['Дата_dt'].isna().all():
+        min_date = df['Дата_dt'].min().date()
+        max_date = df['Дата_dt'].max().date()
         
         date_input = st.sidebar.date_input(
             "📅 Выберите период (или одну дату):",
-            value=(min_date, max_date), # По умолчанию выбран весь доступный период
+            value=(min_date, max_date),
             min_value=min_date,
-            max_value=max_date
+            max_value=max_date,
+            format="DD.MM.YYYY"  # 🔥 Принудительный формат ДД.ММ.ГГГГ
         )
     else:
         date_input = None
@@ -89,14 +91,14 @@ if not df.empty:
         default=sorted(df['Результат'].dropna().unique())
     )
 
-    # 🔥 НОВОЕ: Логика фильтрации по дате
+    # 🔥 Логика фильтрации по дате (используем скрытую колонку Дата_dt)
     if date_input:
         if isinstance(date_input, tuple) and len(date_input) == 2:
             start_date, end_date = date_input
-            date_mask = (df['Дата'].dt.date >= start_date) & (df['Дата'].dt.date <= end_date)
+            date_mask = (df['Дата_dt'].dt.date >= start_date) & (df['Дата_dt'].dt.date <= end_date)
             date_info = f"{start_date.strftime('%d.%m.%Y')} – {end_date.strftime('%d.%m.%Y')}"
         else:
-            date_mask = (df['Дата'].dt.date == date_input)
+            date_mask = (df['Дата_dt'].dt.date == date_input)
             date_info = date_input.strftime('%d.%m.%Y')
     else:
         date_mask = pd.Series(True, index=df.index)
