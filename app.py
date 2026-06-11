@@ -16,6 +16,7 @@ st.title("🦠 Дашборд: Мониторинг антибиотикорез
 def load_data():
     file_name = 'data.xlsx'
     
+    # Если точного имени нет, ищем любой xlsx в папке
     if not os.path.exists(file_name):
         xlsx_files = glob.glob('*.xlsx')
         if xlsx_files:
@@ -23,34 +24,30 @@ def load_data():
             st.warning(f"⚠️ Файл с точным именем не найден. Загружаю: **{file_name}**")
         else:
             st.error("❌ В папке нет ни одного .xlsx файла! Загрузите файл через панель слева.")
-            return pd.DataFrame()
+            return pd.DataFrame(), None
     
     try:
         df = pd.read_excel(file_name)
         
-        # 🔥 АГРЕССИВНАЯ ОЧИСТКА ТЕКСТОВЫХ КОЛОНОК
+        # 🔥 АГРЕССИВНАЯ ОЧИСТКА: убираем лишние пробелы
         for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-        
-        # 🔥 РАБОТА С ДАТАМИ: 
-        # Оставляем оригинальную колонку 'Дата' как есть (строка "04.05.2026") для отображения.
-        # Создаем отдельную колонку 'Дата_dt' строго для внутренней фильтрации.
-        if 'Дата' in df.columns:
-            df['Дата_dt'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
         
         required_cols = ['Отделение', 'Микроорганизм', 'Результат', 'Антибиотик']
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             st.error(f"❌ В файле отсутствуют колонки: {missing}. Проверьте структуру Excel.")
-            return pd.DataFrame()
+            return pd.DataFrame(), None
             
-        return df
+        # 🔥 ВОЗВРАЩАЕМ И ТАБЛИЦУ, И ИМЯ ФАЙЛА
+        return df, file_name
     except Exception as e:
         st.error(f"❌ Ошибка чтения файла: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
-df = load_data()
+# Получаем данные и имя файла
+df, current_file_name = load_data()
 
 # ==============================================================================
 # 2. ОСНОВНАЯ ЛОГИКА
@@ -58,18 +55,24 @@ df = load_data()
 if not df.empty:
     st.sidebar.header("⚙️ Параметры выборки")
     
-    # 🔥 НОВОЕ: Фильтр по дате с принудительным российским форматом
-    if 'Дата_dt' in df.columns and not df['Дата_dt'].isna().all():
-        min_date = df['Дата_dt'].min().date()
-        max_date = df['Дата_dt'].max().date()
+    # Фильтр по дате
+    if 'Дата' in df.columns:
+        # Преобразуем даты для фильтра
+        df['Дата_dt'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
         
-        date_input = st.sidebar.date_input(
-            "📅 Выберите период (или одну дату):",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date,
-            format="DD.MM.YYYY"  # 🔥 Принудительный формат ДД.ММ.ГГГГ
-        )
+        if not df['Дата_dt'].isna().all():
+            min_date = df['Дата_dt'].min().date()
+            max_date = df['Дата_dt'].max().date()
+            
+            date_input = st.sidebar.date_input(
+                "📅 Выберите период:",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                format="DD.MM.YYYY"
+            )
+        else:
+            date_input = None
     else:
         date_input = None
 
@@ -91,7 +94,7 @@ if not df.empty:
         default=sorted(df['Результат'].dropna().unique())
     )
 
-    # 🔥 Логика фильтрации по дате (используем скрытую колонку Дата_dt)
+    # Логика фильтрации по дате
     if date_input:
         if isinstance(date_input, tuple) and len(date_input) == 2:
             start_date, end_date = date_input
@@ -112,7 +115,31 @@ if not df.empty:
         date_mask
     ]
 
-    # --- МЕТРИКИ ---
+    # ==============================================================================
+    # 🔥 НОВОЕ: КНОПКА СКАЧИВАНИЯ И ПРЕДПРОСМОТР В САМОМ НИЗУ САЙДБАРА
+    # ==============================================================================
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("💾 Исходные данные")
+    
+    if current_file_name and os.path.exists(current_file_name):
+        # Кнопка скачивания
+        with open(current_file_name, "rb") as file:
+            st.sidebar.download_button(
+                label=f"📥 Скачать исходный файл\n({current_file_name})",
+                data=file,
+                file_name=current_file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        
+        # Раскрывающийся блок для предпросмотра таблицы прямо в браузере
+        with st.sidebar.expander("👁️ Предпросмотр исходной таблицы"):
+            st.dataframe(df.head(15), use_container_width=True)
+            st.caption(f"Показаны первые 15 строк из {len(df)} всего.")
+
+    # ==============================================================================
+    # 3. МЕТРИКИ И ГРАФИКИ
+    # ==============================================================================
     st.caption(f"📅 **Отображаются данные за период:** {date_info}")
     col1, col2, col3 = st.columns(3)
     col1.metric("📊 Всего тестов", len(filtered_df))
@@ -120,7 +147,6 @@ if not df.empty:
     col3.metric("🦠 Уникальных микробов", filtered_df['Микроорганизм'].nunique())
     st.markdown("---")
 
-    # --- ГРАФИКИ ---
     col_left, col_right = st.columns(2)
     with col_left:
         st.subheader("📈 Распределение по результатам (S / I / R)")
@@ -228,75 +254,49 @@ if not df.empty:
         
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-                # ==============================================================================
-        # 🏆 ПОЛНАЯ СТАТИСТИКА: ВСЕ АНТИБИОТИКИ ДЛЯ КАЖДОГО МИКРООРГАНИЗМА (ПУЛЕПРОБИВАЕМЫЙ)
+        # ==============================================================================
+        # 🏆 ПОЛНАЯ СТАТИСТИКА: ВСЕ АНТИБИОТИКИ ДЛЯ КАЖДОГО МИКРООРГАНИЗМА
         # ==============================================================================
         st.markdown("---")
         st.subheader("🏆 Полная статистика: все антибиотики для каждого микроорганизма")
         st.caption("💡 *Показаны все антибиотики, отсортированные по убыванию % чувствительности (S). Учитываются только пары, протестированные ≥ 3 раз.*")
-
-        if not valid_df.empty:
-            # 🔥 НАДЕЖНЫЙ СПОСОБ ПОДСЧЕТА (избегаем ошибок unstack)
-            # 1. Считаем общее количество тестов
-            total_counts = valid_df.groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='Total')
-
-            # 2. Считаем S, I, R отдельно
-            s_counts = valid_df[valid_df['Результат'] == 'S'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='S')
-            i_counts = valid_df[valid_df['Результат'] == 'I'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='I')
-            r_counts = valid_df[valid_df['Результат'] == 'R'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='R')
-
-            # 3. Объединяем все в один датафрейм
-            microbe_ab_stats = total_counts.merge(s_counts, on=['Микроорганизм', 'Антибиотик'], how='left') \
-                                           .merge(i_counts, on=['Микроорганизм', 'Антибиотик'], how='left') \
-                                           .merge(r_counts, on=['Микроорганизм', 'Антибиотик'], how='left')
-
-            # 4. Заполняем пропуски (NaN) нулями и делаем целыми числами
-            microbe_ab_stats = microbe_ab_stats.fillna(0)
-            microbe_ab_stats['S'] = microbe_ab_stats['S'].astype(int)
-            microbe_ab_stats['I'] = microbe_ab_stats['I'].astype(int)
-            microbe_ab_stats['R'] = microbe_ab_stats['R'].astype(int)
-
-            # 5. Считаем проценты
-            microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
-            microbe_ab_stats['%I'] = (microbe_ab_stats['I'] / microbe_ab_stats['Total']) * 100
-            microbe_ab_stats['%R'] = (microbe_ab_stats['R'] / microbe_ab_stats['Total']) * 100
-
-            # 6. Фильтр: минимум 3 теста
-            microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
-
-            # 7. Сортируем по Микробу, а внутри него - по %S (по убыванию)
-            all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
-
-            # 8. Форматируем для красивого вывода
-            display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
-            display_all['%S'] = display_all['%S'].round(1)
-            display_all['%I'] = display_all['%I'].round(1)
-            display_all['%R'] = display_all['%R'].round(1)
-
-            # Переименовываем колонки для максимальной понятности
-            display_all.columns = [
-                'Микроорганизм', 'Антибиотик', 'Всего тестов',
-                'Чувствителен (S)', '% Чувствительности (S)',
-                'Умеренно-резист. (I)', '% Умеренно-резист. (I)',
-                'Резистентен (R)', '% Резистентности (R)'
-            ]
-
-            # 9. Добавляем цветовую индикацию для ВСЕХ трех процентов
-            styled_all = display_all.style.background_gradient(
-                subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
-            ).background_gradient(
-                subset=['% Умеренно-резист. (I)'], cmap='YlOrBr', vmin=0, vmax=100
-            ).background_gradient(
-                subset=['% Резистентности (R)'], cmap='Reds', vmin=0, vmax=100
-            ).format({
-                '% Чувствительности (S)': '{:.1f}%',
-                '% Умеренно-резист. (I)': '{:.1f}%',
-                '% Резистентности (R)': '{:.1f}%'
-            })
-
-            st.dataframe(styled_all, use_container_width=True, hide_index=True)
-        else:
-            st.info("Нет данных для построения таблицы (проверьте фильтры или выберите другой период).")
+        
+        microbe_ab_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
+        for col in ['S', 'I', 'R']:
+            if col not in microbe_ab_stats.columns: microbe_ab_stats[col] = 0
+            
+        microbe_ab_stats['Total'] = microbe_ab_stats['S'] + microbe_ab_stats['I'] + microbe_ab_stats['R']
+        microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
+        microbe_ab_stats = microbe_ab_stats.reset_index()
+        
+        microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
+        all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
+        
+        display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
+        display_all['%S'] = display_all['%S'].round(1)
+        display_all['%I'] = display_all['%I'].round(1)
+        display_all['%R'] = display_all['%R'].round(1)
+        
+        display_all.columns = [
+            'Микроорганизм', 'Антибиотик', 'Всего тестов', 
+            'Чувствителен (S)', '% Чувствительности (S)', 
+            'Умеренно-резист. (I)', '% Умеренно-резист. (I)', 
+            'Резистентен (R)', '% Резистентности (R)'
+        ]
+        
+        styled_all = display_all.style.background_gradient(
+            subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
+        ).background_gradient(
+            subset=['% Умеренно-резист. (I)'], cmap='YlOrBr', vmin=0, vmax=100
+        ).background_gradient(
+            subset=['% Резистентности (R)'], cmap='Reds', vmin=0, vmax=100
+        ).format({
+            '% Чувствительности (S)': '{:.1f}%',
+            '% Умеренно-резист. (I)': '{:.1f}%',
+            '% Резистентности (R)': '{:.1f}%'
+        })
+        
+        st.dataframe(styled_all, use_container_width=True, hide_index=True)
 
 else:
     st.stop()
