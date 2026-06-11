@@ -228,49 +228,75 @@ if not df.empty:
         
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-        # ==============================================================================
-        # 🏆 ПОЛНАЯ СТАТИСТИКА: ВСЕ АНТИБИОТИКИ ДЛЯ КАЖДОГО МИКРООРГАНИЗМА
+                # ==============================================================================
+        # 🏆 ПОЛНАЯ СТАТИСТИКА: ВСЕ АНТИБИОТИКИ ДЛЯ КАЖДОГО МИКРООРГАНИЗМА (ПУЛЕПРОБИВАЕМЫЙ)
         # ==============================================================================
         st.markdown("---")
         st.subheader("🏆 Полная статистика: все антибиотики для каждого микроорганизма")
         st.caption("💡 *Показаны все антибиотики, отсортированные по убыванию % чувствительности (S). Учитываются только пары, протестированные ≥ 3 раз.*")
-        
-        microbe_ab_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
-        for col in ['S', 'I', 'R']:
-            if col not in microbe_ab_stats.columns: microbe_ab_stats[col] = 0
-            
-        microbe_ab_stats['Total'] = microbe_ab_stats['S'] + microbe_ab_stats['I'] + microbe_ab_stats['R']
-        microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
-        microbe_ab_stats = microbe_ab_stats.reset_index()
-        
-        microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
-        all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
-        
-        display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
-        display_all['%S'] = display_all['%S'].round(1)
-        display_all['%I'] = display_all['%I'].round(1)
-        display_all['%R'] = display_all['%R'].round(1)
-        
-        display_all.columns = [
-            'Микроорганизм', 'Антибиотик', 'Всего тестов', 
-            'Чувствителен (S)', '% Чувствительности (S)', 
-            'Умеренно-резист. (I)', '% Умеренно-резист. (I)', 
-            'Резистентен (R)', '% Резистентности (R)'
-        ]
-        
-        styled_all = display_all.style.background_gradient(
-            subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
-        ).background_gradient(
-            subset=['% Умеренно-резист. (I)'], cmap='YlOrBr', vmin=0, vmax=100
-        ).background_gradient(
-            subset=['% Резистентности (R)'], cmap='Reds', vmin=0, vmax=100
-        ).format({
-            '% Чувствительности (S)': '{:.1f}%',
-            '% Умеренно-резист. (I)': '{:.1f}%',
-            '% Резистентности (R)': '{:.1f}%'
-        })
-        
-        st.dataframe(styled_all, use_container_width=True, hide_index=True)
+
+        if not valid_df.empty:
+            # 🔥 НАДЕЖНЫЙ СПОСОБ ПОДСЧЕТА (избегаем ошибок unstack)
+            # 1. Считаем общее количество тестов
+            total_counts = valid_df.groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='Total')
+
+            # 2. Считаем S, I, R отдельно
+            s_counts = valid_df[valid_df['Результат'] == 'S'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='S')
+            i_counts = valid_df[valid_df['Результат'] == 'I'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='I')
+            r_counts = valid_df[valid_df['Результат'] == 'R'].groupby(['Микроорганизм', 'Антибиотик']).size().reset_index(name='R')
+
+            # 3. Объединяем все в один датафрейм
+            microbe_ab_stats = total_counts.merge(s_counts, on=['Микроорганизм', 'Антибиотик'], how='left') \
+                                           .merge(i_counts, on=['Микроорганизм', 'Антибиотик'], how='left') \
+                                           .merge(r_counts, on=['Микроорганизм', 'Антибиотик'], how='left')
+
+            # 4. Заполняем пропуски (NaN) нулями и делаем целыми числами
+            microbe_ab_stats = microbe_ab_stats.fillna(0)
+            microbe_ab_stats['S'] = microbe_ab_stats['S'].astype(int)
+            microbe_ab_stats['I'] = microbe_ab_stats['I'].astype(int)
+            microbe_ab_stats['R'] = microbe_ab_stats['R'].astype(int)
+
+            # 5. Считаем проценты
+            microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
+            microbe_ab_stats['%I'] = (microbe_ab_stats['I'] / microbe_ab_stats['Total']) * 100
+            microbe_ab_stats['%R'] = (microbe_ab_stats['R'] / microbe_ab_stats['Total']) * 100
+
+            # 6. Фильтр: минимум 3 теста
+            microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
+
+            # 7. Сортируем по Микробу, а внутри него - по %S (по убыванию)
+            all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
+
+            # 8. Форматируем для красивого вывода
+            display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
+            display_all['%S'] = display_all['%S'].round(1)
+            display_all['%I'] = display_all['%I'].round(1)
+            display_all['%R'] = display_all['%R'].round(1)
+
+            # Переименовываем колонки для максимальной понятности
+            display_all.columns = [
+                'Микроорганизм', 'Антибиотик', 'Всего тестов',
+                'Чувствителен (S)', '% Чувствительности (S)',
+                'Умеренно-резист. (I)', '% Умеренно-резист. (I)',
+                'Резистентен (R)', '% Резистентности (R)'
+            ]
+
+            # 9. Добавляем цветовую индикацию для ВСЕХ трех процентов
+            styled_all = display_all.style.background_gradient(
+                subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
+            ).background_gradient(
+                subset=['% Умеренно-резист. (I)'], cmap='YlOrBr', vmin=0, vmax=100
+            ).background_gradient(
+                subset=['% Резистентности (R)'], cmap='Reds', vmin=0, vmax=100
+            ).format({
+                '% Чувствительности (S)': '{:.1f}%',
+                '% Умеренно-резист. (I)': '{:.1f}%',
+                '% Резистентности (R)': '{:.1f}%'
+            })
+
+            st.dataframe(styled_all, use_container_width=True, hide_index=True)
+        else:
+            st.info("Нет данных для построения таблицы (проверьте фильтры или выберите другой период).")
 
 else:
     st.stop()
