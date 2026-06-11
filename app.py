@@ -4,60 +4,240 @@ import plotly.express as px
 import plotly.figure_factory as ff
 import os
 import glob
+import tempfile
+import subprocess
+from docx import Document
 
 # Настройка страницы
 st.set_page_config(page_title="Мониторинг резистентности", layout="wide", page_icon="🦠")
 st.title("🦠 Дашборд: Мониторинг антибиотикорезистентности")
 
 # ==============================================================================
-# 1. ЗАГРУЗКА И ПОДГОТОВКА ДАННЫХ
+# 1. ФУНКЦИЯ ПАРСИНГА (БЕЗ ФИО И ИСХОДНОГО ФАЙЛА)
+# ==============================================================================
+def parse_docx_file(file_path):
+    """Извлекает данные из .docx и возвращает DataFrame. При ошибке -> None"""
+    try:
+        doc = Document(file_path extents=True)
+        metadata = {}
+        microbes = {}
+        results = []
+        GROUP_KEYWORDS = ["лактамы", "аминогликозиды", "фторхинолоны", "макролиды", "другие группы", 
+                          "критерии", "интерпретация", "дата выдачи", "документ", "должность"]
+
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                full_row_text = " ".join(cells).lower()
+
+                # --- Таблица микробов ---
+                if "Наименование микроорганизма" in full_row_text and "№" in full_row_text:
+                    continue
+                if len(cells) >= 3 and cells[0].isdigit() and len(cells[1]) > 5:
+                    microbes[int(cells[0])] = {"name": cells[1], "coe": cells[2]}
+
+                # --- Метаданные (ФИО УДАЛЕНО НАМЕРЕННО) ---
+                for i, txt in enumerate(cells):
+                    t = txt.lower()
+                    if "дата приема" in t and i+1 < len(cells): metadata["Дата"] = cells[i+1]
+                    if "отделение" in t and "учреждение" not in t and i+1 < len(cells): metadata["Отделение"] = cells[i+1]
+                    if "биоматериал" in t and i+1 < len(cells): metadata["Биоматериал"] = cells[i+1]
+                    if "№ анализа" in t and i+1 < len(cells): metadata["№_анализа"] = cells[i+1]
+
+                # --- Антибиотикограмма ---
+                header = [cell.text.strip() for cell in table.rows[0].cells]
+                if len(header) > 0 and "Антибиотикограмма" in header[0]:
+                    col_to_microbe = {}
+                    for idx, h in enumerate(header[1:], 1):
+                        if h.isdigit() and int(h) in microbes:
+                            col_to_microbe[idx] = int(h)
+                    
+                    current_group = ""
+                    for r_idx, r in enumerate(table.rows):
+                        if r_idx == 0: continue
+                        r_cells = [c.text.strip() for c in r.cells]
+                        if not r_cells: continue
+                        
+                        abx_name = r_cells[0]
+                        if any(kw in abx_name.lower() for kw in GROUP_KEYWORDS):
+                            if not any(kw in abx_name.lower() for kw in ["критерии", "интерпретация", "дата выдачи", "документ"]):
+                                current_group = abx_name
+                            continue
+                        
+                        if not abx_name: continue
+                        
+                        for col_idx, mid in col_to_microbe.items():
+                            if col_idx < len(r_cells):
+                                res = r_cells[col_idx].strip().upper()
+                                if res and res != "-":
+                                    results.append({
+                                        "№_анализа": metadata.get("№_анализа", ""),
+                                        "Дата": metadata.get("Дата", ""),
+                                        "Отделение": metadata.get("Отделение", ""),
+                                        "Биоматериал": metadata.get("Биоматериал", ""),
+                                        "№_микроба": mid,
+                                        "Микроорганизм": microbes.get(mid, {}).get("name", ""),
+                                        "КОЕ": microbes.get(mid, {}).get("coe", ""),
+                                        "Группа_антибиотиков": current_group,
+                                        "Антибиотик": abx_name,
+                                        "Результат": res
+                                        # Столбцы 'ФИО' и 'Исходный файл' намеренно исключены
+                                    })
+                    break 
+
+        if not results:
+            return None
+            
+        df = pd.DataFrame(results)
+        return df
+
+    except Exception as e:
+        return str(e)
+
+# ==============================================================================
+# 2. ЗАГРУЗКА И ПОДГОТОВКА ОСНОВНЫХ ДАННЫХ
 # ==============================================================================
 @st.cache_data
 def load_data():
-    file_name = 'data.xlsx'
+    file_name = 'data.xlsx' # Убедись, что твой файл называется так, или поменяй здесь
     
     if not os.path.exists(file_name):
+        # Попытка найти любой xlsx, если точного имени нет
         xlsx_files = glob.glob('*.xlsx')
         if xlsx_files:
             file_name = xlsx_files[0]
-            st.warning(f"⚠️ Файл с точным именем не найден. Загружаю: **{file_name}**")
         else:
-            st.error("❌ В папке нет ни одного .xlsx файла! Загрузите файл через панель слева.")
-            return pd.DataFrame(), None
+            return pd.DataFrame()
     
     try:
         df = pd.read_excel(file_name)
-        
-        # 🔥 АГРЕССИВНАЯ ОЧИСТКА: убираем пробелы и приводим к верхнему регистру
-        for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат']:
+        # Очистка пробелов
+        for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат', 'Биоматериал']:
             if col in df.columns:
-                df[col] = df[col].astype(str).str.strip().str.upper()
-        
-        required_cols = ['Отделение', 'Микроорганизм', 'Результат', 'Антибиотик']
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            st.error(f"❌ В файле отсутствуют колонки: {missing}. Проверьте структуру Excel.")
-            return pd.DataFrame(), None
-            
+                df[col] = df[col].astype(str).str.strip()
         return df, file_name
     except Exception as e:
         st.error(f"❌ Ошибка чтения файла: {e}")
-        return pd.DataFrame(), None
+        return pd.DataFrame(), file_name
 
 df, current_file_name = load_data()
 
 # ==============================================================================
-# 2. ОСНОВНАЯ ЛОГИКА
+# 3. ИНТЕРФЕЙС ЗАГРУЗКИ НОВЫХ ДАННЫХ (В САЙДБАРЕ)
+# ==============================================================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📥 Загрузка новых данных")
+st.sidebar.caption("Загрузите новые .doc или .docx файлы. Данные будут объединены с текущей таблицей.")
+
+uploaded_files = st.sidebar.file_uploader(
+    "Выберите файлы", 
+    type=['doc', 'docx'], 
+    accept_multiple_files=True,
+    help="💡 Совет: Сохраняйте файлы как .docx в Word перед загрузкой. Это гарантирует 100% успех парсинга без необходимости конвертации."
+)
+
+if uploaded_files:
+    st.sidebar.info(f"Выбрано файлов: {len(uploaded_files)}")
+    
+    if st.sidebar.button("🔄 Обработать и обновить таблицу"):
+        progress_bar = st.sidebar.progress(0)
+        status_text = st.sidebar.empty()
+        
+        all_new_dfs = []
+        errors = []
+        
+        for i, uploaded_file in enumerate(uploaded_files):
+            status_text.text(f"Обработка: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+            progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            # Создаем временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_path = tmp_file.name
+            
+            try:
+                final_path = tmp_path
+                # Если это старый .doc, пытаемся конвертировать (работает только если установлен LibreOffice)
+                if tmp_path.lower().endswith('.doc'):
+                    docx_path = tmp_path.rsplit('.', 1)[0] + '.docx'
+                    try:
+                        cmd = ['libreoffice', '--headless', '--convert-to', 'docx', '--outdir', os.path.dirname(tmp_path), tmp_path]
+                        res = subprocess.run(cmd, capture_output=True, text=True)
+                        if res.returncode == 0 and os.path.exists(docx_path):
+                            final_path = docx_path
+                        else:
+                            errors.append(f"{uploaded_file.name}: Не удалось конвертировать .doc (нет LibreOffice). Сохраните как .docx")
+                            continue
+                    except FileNotFoundError:
+                        errors.append(f"{uploaded_file.name}: LibreOffice не найден. Сохраните файл как .docx")
+                        continue
+                
+                # Парсим файл
+                parsed_df = parse_docx_file(final_path)
+                
+                if isinstance(parsed_df, pd.DataFrame):
+                    all_new_dfs.append(parsed_df)
+                elif isinstance(parsed_df, str):
+                    errors.append(f"{uploaded_file.name}: Ошибка парсинга ({parsed_df})")
+                    
+            finally:
+                # Очистка временных файлов
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+                if 'docx_path' in locals() and os.path.exists(docx_path): os.remove(docx_path)
+
+        status_text.text("Готово!")
+        progress_bar.empty()
+
+        if all_new_dfs:
+            new_data_df = pd.concat(all_new_dfs, ignore_index=True)
+            
+            # Объединяем с существующими данными
+            if not df.empty:
+                # Удаляем полностью идентичные дубликаты на случай повторной загрузки
+                combined_df = pd.concat([df, new_data_df], ignore_index=True).drop_duplicates()
+            else:
+                combined_df = new_data_df
+
+            # Сортировка
+            if 'Дата' in combined_df.columns:
+                # Пытаемся отсортировать по дате, если она в формате строки
+                combined_df = combined_df.sort_values(by=["Дата", "Отделение", "Микроорганизм"])
+
+            # Предлагаем скачать обновленный файл
+            st.sidebar.success(f"✅ Успешно обработано {len(all_new_dfs)} файлов! Добавлено {len(new_data_df)} строк.")
+            
+            output_filename = "updated_data.xlsx"
+            combined_df.to_excel(output_filename, index=False)
+            
+            with open(output_filename, "rb") as f:
+                st.sidebar.download_button(
+                    label="💾 Скачать обновленную таблицу data.xlsx",
+                    data=f,
+                    file_name="data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            st.sidebar.caption("⚠️ Скачайте файл и замените им старый `data.xlsx` в папке проекта (или загрузите его в GitHub, если используете Cloud).")
+        
+        if errors:
+            with st.sidebar.expander("⚠️ Ошибки при обработке некоторых файлов"):
+                for err in errors:
+                    st.warning(err)
+
+# ==============================================================================
+# 4. ОСНОВНАЯ ЛОГИКА ДАШБОРДА (Если данные загружены)
 # ==============================================================================
 if not df.empty:
     st.sidebar.header("⚙️ Параметры выборки")
     
     # Фильтр по дате
     if 'Дата' in df.columns:
+        # Преобразуем даты для фильтра (игнорируя ошибки парсинга дат)
         df['Дата_dt'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
-        if not df['Дата_dt'].isna().all():
-            min_date = df['Дата_dt'].min().date()
-            max_date = df['Дата_dt'].max().date()
+        valid_dates = df['Дата_dt'].dropna()
+        if not valid_dates.empty:
+            min_date = valid_dates.min().date()
+            max_date = valid_dates.max().date()
             
             date_input = st.sidebar.date_input(
                 "📅 Выберите период:",
@@ -71,23 +251,9 @@ if not df.empty:
     else:
         date_input = None
 
-    depts = st.sidebar.multiselect(
-        "🏥 Выберите отделение:", 
-        options=sorted(df['Отделение'].dropna().unique()), 
-        default=sorted(df['Отделение'].dropna().unique())
-    )
-    
-    microbes = st.sidebar.multiselect(
-        "🦠 Выберите микроорганизм:", 
-        options=sorted(df['Микроорганизм'].dropna().unique()), 
-        default=sorted(df['Микроорганизм'].dropna().unique())
-    )
-    
-    results = st.sidebar.multiselect(
-        "🧪 Выберите результат (S/I/R):", 
-        options=sorted(df['Результат'].dropna().unique()), 
-        default=sorted(df['Результат'].dropna().unique())
-    )
+    depts = st.sidebar.multiselect("🏥 Выберите отделение:", options=sorted(df['Отделение'].dropna().unique()), default=sorted(df['Отделение'].dropna().unique()))
+    microbes = st.sidebar.multiselect("🦠 Выберите микроорганизм:", options=sorted(df['Микроорганизм'].dropna().unique()), default=sorted(df['Микроорганизм'].dropna().unique()))
+    results = st.sidebar.multiselect("🧪 Выберите результат (S/I/R):", options=sorted(df['Результат'].dropna().unique()), default=sorted(df['Результат'].dropna().unique()))
 
     # Логика фильтрации по дате
     if date_input:
@@ -102,7 +268,6 @@ if not df.empty:
         date_mask = pd.Series(True, index=df.index)
         date_info = "весь период"
 
-    # Применяем все фильтры вместе
     filtered_df = df[
         (df['Отделение'].isin(depts)) &
         (df['Микроорганизм'].isin(microbes)) &
@@ -110,29 +275,7 @@ if not df.empty:
         date_mask
     ]
 
-    # ==============================================================================
-    # КНОПКА СКАЧИВАНИЯ И ПРЕДПРОСМОТР В САМОМ НИЗУ САЙДБАРА
-    # ==============================================================================
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("💾 Исходные данные")
-    
-    if current_file_name and os.path.exists(current_file_name):
-        with open(current_file_name, "rb") as file:
-            st.sidebar.download_button(
-                label=f"📥 Скачать исходный файл\n({current_file_name})",
-                data=file,
-                file_name=current_file_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        
-        with st.sidebar.expander("👁️ Предпросмотр исходной таблицы"):
-            st.dataframe(df.head(15), use_container_width=True)
-            st.caption(f"Показаны первые 15 строк из {len(df)} всего.")
-
-    # ==============================================================================
-    # 3. МЕТРИКИ И ГРАФИКИ
-    # ==============================================================================
+    # --- МЕТРИКИ ---
     st.caption(f"📅 **Отображаются данные за период:** {date_info}")
     col1, col2, col3 = st.columns(3)
     col1.metric("📊 Всего тестов", len(filtered_df))
@@ -140,6 +283,7 @@ if not df.empty:
     col3.metric("🦠 Уникальных микробов", filtered_df['Микроорганизм'].nunique())
     st.markdown("---")
 
+    # --- ГРАФИКИ ---
     col_left, col_right = st.columns(2)
     with col_left:
         st.subheader("📈 Распределение по результатам (S / I / R)")
@@ -254,36 +398,24 @@ if not df.empty:
         st.subheader("🏆 Полная статистика: все антибиотики для каждого микроорганизма")
         st.caption("💡 *Показаны все антибиотики, отсортированные по убыванию % чувствительности (S). Учитываются только пары, протестированные ≥ 3 раз.*")
         
-        # 1. Считаем полную статистику для каждой пары Микроб-Антибиотик
         microbe_ab_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
-        
-        # Страховка: добавляем колонки, если их нет
         for col in ['S', 'I', 'R']:
-            if col not in microbe_ab_stats.columns:
-                microbe_ab_stats[col] = 0
-                
+            if col not in microbe_ab_stats.columns: microbe_ab_stats[col] = 0
+            
         microbe_ab_stats['Total'] = microbe_ab_stats['S'] + microbe_ab_stats['I'] + microbe_ab_stats['R']
-        
-        # 🔥 ИСПРАВЛЕНИЕ: рассчитываем ВСЕ проценты перед выбором колонок
         microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
         microbe_ab_stats['%I'] = (microbe_ab_stats['I'] / microbe_ab_stats['Total']) * 100
         microbe_ab_stats['%R'] = (microbe_ab_stats['R'] / microbe_ab_stats['Total']) * 100
-        
         microbe_ab_stats = microbe_ab_stats.reset_index()
         
-        # 2. Фильтр: минимум 3 теста
         microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
-        
-        # 3. Сортируем по Микробу, а внутри него - по %S (по убыванию)
         all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
         
-        # 4. Форматируем для красивого вывода
         display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
         display_all['%S'] = display_all['%S'].round(1)
         display_all['%I'] = display_all['%I'].round(1)
         display_all['%R'] = display_all['%R'].round(1)
         
-        # Переименовываем колонки для максимальной понятности
         display_all.columns = [
             'Микроорганизм', 'Антибиотик', 'Всего тестов', 
             'Чувствителен (S)', '% Чувствительности (S)', 
@@ -291,7 +423,6 @@ if not df.empty:
             'Резистентен (R)', '% Резистентности (R)'
         ]
         
-        # 5. Добавляем цветовую индикацию для ВСЕХ трех процентов
         styled_all = display_all.style.background_gradient(
             subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
         ).background_gradient(
@@ -307,4 +438,4 @@ if not df.empty:
         st.dataframe(styled_all, use_container_width=True, hide_index=True)
 
 else:
-    st.stop()
+    st.warning("⚠️ Файл с данными не найден. Пожалуйста, загрузите `data.xlsx` или используйте панель слева для загрузки новых .doc/.docx файлов.")
