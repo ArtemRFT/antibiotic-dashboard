@@ -14,7 +14,7 @@ st.title("🦠 Дашборд: Мониторинг антибиотикорез
 # ==============================================================================
 @st.cache_data
 def load_data():
-    file_name = 'ИТОГОВЫЙ_МОНИТОРИНГ_май2026-дашборд.xlsx'
+    file_name = 'data.xlsx'
     
     if not os.path.exists(file_name):
         xlsx_files = glob.glob('*.xlsx')
