@@ -29,7 +29,8 @@ def load_data():
         df = pd.read_excel(file_name)
         
         # 🔥 АГРЕССИВНАЯ ОЧИСТКА: убираем пробелы и приводим к верхнему регистру
-        for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат']:
+        # (добавили 'Биоматериал' в список)
+        for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат', 'Биоматериал']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip().str.upper()
         
@@ -77,6 +78,18 @@ if not df.empty:
         default=sorted(df['Отделение'].dropna().unique())
     )
     
+    # 🔥 НОВЫЙ ФИЛЬТР: БИОМАТЕРИАЛ (появляется только если колонка есть в файле)
+    has_material = 'Биоматериал' in df.columns
+    if has_material:
+        materials = st.sidebar.multiselect(
+            "🧫 Выберите биоматериал:", 
+            options=sorted(df['Биоматериал'].dropna().unique()), 
+            default=sorted(df['Биоматериал'].dropna().unique())
+        )
+    else:
+        materials = None
+        st.sidebar.info("ℹ️ Колонка 'Биоматериал' в файле не найдена — фильтр отключён.")
+    
     microbes = st.sidebar.multiselect(
         "🦠 Выберите микроорганизм:", 
         options=sorted(df['Микроорганизм'].dropna().unique()), 
@@ -102,9 +115,16 @@ if not df.empty:
         date_mask = pd.Series(True, index=df.index)
         date_info = "весь период"
 
+    # 🔥 Маска по биоматериалу (если колонки нет — пропускаем)
+    if has_material and materials:
+        material_mask = df['Биоматериал'].isin(materials)
+    else:
+        material_mask = pd.Series(True, index=df.index)
+
     # Применяем все фильтры вместе
     filtered_df = df[
         (df['Отделение'].isin(depts)) &
+        material_mask &
         (df['Микроорганизм'].isin(microbes)) &
         (df['Результат'].isin(results)) &
         date_mask
@@ -254,36 +274,28 @@ if not df.empty:
         st.subheader("🏆 Полная статистика: все антибиотики для каждого микроорганизма")
         st.caption("💡 *Показаны все антибиотики, отсортированные по убыванию % чувствительности (S). Учитываются только пары, протестированные ≥ 3 раз.*")
         
-        # 1. Считаем полную статистику для каждой пары Микроб-Антибиотик
         microbe_ab_stats = valid_df.groupby(['Микроорганизм', 'Антибиотик'])['Результат'].value_counts().unstack(fill_value=0)
         
-        # Страховка: добавляем колонки, если их нет
         for col in ['S', 'I', 'R']:
             if col not in microbe_ab_stats.columns:
                 microbe_ab_stats[col] = 0
                 
         microbe_ab_stats['Total'] = microbe_ab_stats['S'] + microbe_ab_stats['I'] + microbe_ab_stats['R']
         
-        # 🔥 ИСПРАВЛЕНИЕ: рассчитываем ВСЕ проценты перед выбором колонок
         microbe_ab_stats['%S'] = (microbe_ab_stats['S'] / microbe_ab_stats['Total']) * 100
         microbe_ab_stats['%I'] = (microbe_ab_stats['I'] / microbe_ab_stats['Total']) * 100
         microbe_ab_stats['%R'] = (microbe_ab_stats['R'] / microbe_ab_stats['Total']) * 100
         
         microbe_ab_stats = microbe_ab_stats.reset_index()
-        
-        # 2. Фильтр: минимум 3 теста
         microbe_ab_stats = microbe_ab_stats[microbe_ab_stats['Total'] >= 3].copy()
         
-        # 3. Сортируем по Микробу, а внутри него - по %S (по убыванию)
         all_effective = microbe_ab_stats.sort_values(by=['Микроорганизм', '%S'], ascending=[True, False]).copy()
         
-        # 4. Форматируем для красивого вывода
         display_all = all_effective[['Микроорганизм', 'Антибиотик', 'Total', 'S', '%S', 'I', '%I', 'R', '%R']].copy()
         display_all['%S'] = display_all['%S'].round(1)
         display_all['%I'] = display_all['%I'].round(1)
         display_all['%R'] = display_all['%R'].round(1)
         
-        # Переименовываем колонки для максимальной понятности
         display_all.columns = [
             'Микроорганизм', 'Антибиотик', 'Всего тестов', 
             'Чувствителен (S)', '% Чувствительности (S)', 
@@ -291,7 +303,6 @@ if not df.empty:
             'Резистентен (R)', '% Резистентности (R)'
         ]
         
-        # 5. Добавляем цветовую индикацию для ВСЕХ трех процентов
         styled_all = display_all.style.background_gradient(
             subset=['% Чувствительности (S)'], cmap='Greens', vmin=0, vmax=100
         ).background_gradient(
