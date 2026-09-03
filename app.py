@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.figure_factory as ff
+import plotly.graph_objects as go
 import os
 import glob
 
@@ -29,7 +29,6 @@ def load_data():
         df = pd.read_excel(file_name)
         
         # 🔥 АГРЕССИВНАЯ ОЧИСТКА: убираем пробелы и приводим к верхнему регистру
-        # (добавили 'Биоматериал' в список)
         for col in ['Антибиотик', 'Микроорганизм', 'Отделение', 'Результат', 'Биоматериал']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip().str.upper()
@@ -78,7 +77,7 @@ if not df.empty:
         default=sorted(df['Отделение'].dropna().unique())
     )
     
-    # 🔥 НОВЫЙ ФИЛЬТР: БИОМАТЕРИАЛ (появляется только если колонка есть в файле)
+    # 🔥 ФИЛЬТР: БИОМАТЕРИАЛ (появляется только если колонка есть в файле)
     has_material = 'Биоматериал' in df.columns
     if has_material:
         materials = st.sidebar.multiselect(
@@ -234,16 +233,56 @@ if not df.empty:
                     mask = (heatmap_df['Микроорганизм'] == microbe) & (heatmap_df['Антибиотик'] == ab)
                     if mask.any():
                         d = heatmap_df[mask].iloc[0]
-                        row_z.append(f"S:{d['%S']:.0f}%\nI:{d['%I']:.0f}%\nR:{d['%R']:.0f}%")
+                        row_z.append(f"S:{d['%S']:.0f}%<br>I:{d['%I']:.0f}%<br>R:{d['%R']:.0f}%")
                         row_hover.append(f"<b>{microbe}</b> + <b>{ab}</b><br>Всего тестов: {int(d['Total'])}<br>🟢 S: {int(d['S'])} ({d['%S']:.1f}%)<br>🟡 I: {int(d['I'])} ({d['%I']:.1f}%)<br>🔴 R: {int(d['R'])} ({d['%R']:.1f}%)")
                     else:
                         row_z.append("")
                         row_hover.append(f"<b>{microbe}</b> + <b>{ab}</b><br>Нет данных (< 3 тестов)")
                 z_text.append(row_z)
                 hover_text.append(row_hover)
-            
-            fig_heatmap = ff.create_annotated_heatmap(z=pivot_color.values, x=list(pivot_color.columns), y=list(pivot_color.index), annotation_text=z_text, colorscale='RdYlGn_r', showscale=True, hovertext=hover_text, hoverinfo='text', font_colors=['black', 'white'])
-            fig_heatmap.update_layout(height=max(500, len(pivot_color.index) * 35), width=max(800, len(pivot_color.columns) * 65), xaxis_title='Антибиотик', yaxis_title='Микроорганизм', xaxis=dict(tickangle=-45, tickfont=dict(size=10)), yaxis=dict(tickfont=dict(size=11)), margin=dict(l=220, b=150))
+
+            # --- Ручная сборка теплокарты через go.Heatmap (замена ff.create_annotated_heatmap) ---
+            x_labels = [str(c) for c in pivot_color.columns]
+            y_labels = [str(i) for i in pivot_color.index]
+            z_values = pivot_color.values.astype(float)
+
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=z_values,
+                x=x_labels,
+                y=y_labels,
+                colorscale='RdYlGn_r',
+                showscale=True,
+                text=hover_text,
+                hoverinfo='text',
+                zmin=0,
+                zmax=100
+            ))
+
+            annotations = []
+            for i, y in enumerate(y_labels):
+                for j, x in enumerate(x_labels):
+                    val = z_values[i][j]
+                    text = z_text[i][j]
+                    if text:
+                        annotations.append(dict(
+                            x=x, y=y, text=text,
+                            showarrow=False,
+                            font=dict(
+                                color='white' if val > 50 else 'black',
+                                size=10
+                            )
+                        ))
+
+            fig_heatmap.update_layout(
+                annotations=annotations,
+                height=max(500, len(pivot_color.index) * 35),
+                width=max(800, len(pivot_color.columns) * 65),
+                xaxis_title='Антибиотик',
+                yaxis_title='Микроорганизм',
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+                yaxis=dict(tickfont=dict(size=11)),
+                margin=dict(l=220, b=150)
+            )
             st.plotly_chart(fig_heatmap, use_container_width=True)
 
         # ==========================================
